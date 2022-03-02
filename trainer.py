@@ -32,9 +32,9 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.distributed.pipeline.sync import Pipe
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
-from torch.distributed._fsdp.wrap import enable_wrap, wrap
-from torch.distributed._fsdp import FullyShardedDataParallel as FSDP, CPUOffload
-from torch.distributed._fsdp.fully_sharded_data_parallel import BackwardPrefetch_
+from torch.distributed.fsdp.wrap import enable_wrap, wrap
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, CPUOffload
+from torch.distributed.fsdp.fully_sharded_data_parallel import BackwardPrefetch_
 from fairscale.nn.data_parallel import FullyShardedDataParallel as fairscale_fsdp
 
 @dataclass
@@ -170,6 +170,13 @@ def parse_args():
         )
     )
 
+    parser.add_argument(
+        "--use_meta",
+        type=bool,
+        default=False,
+        help="meta module"
+    )
+
     return parser.parse_args()
 
 
@@ -250,6 +257,9 @@ def build_fsdp_model(args):
     if args.model.startswith("GPT"):
         # still needs to call to(device) because GPT buffer is still on CPU
         if args.version == "pytorch":
+            # Try meta
+            if args.use_meta:
+                pass
             with enable_wrap(wrapper_cls=FSDP, cpu_offload=cpu_offload_config, backward_prefetch=backward_prefetch):
                 if args.cpu_offload:
                     return wrap(ShardedGPT(get_gpt_config(args), device=device, dtype=args.dtype, activation=args.activation))

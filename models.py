@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from torch.distributed._fsdp.wrap import wrap
+from torch.distributed.fsdp.wrap import wrap
 
 rank = int(os.getenv("RANK", "0"))
 
