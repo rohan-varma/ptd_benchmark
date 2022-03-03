@@ -101,20 +101,48 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
     def run_deferred():
         init_deferred_start.record()
         model = deferred_lambda()
+        n_wrap = 0
+        for m in model.modules():
+            if getattr(m, '_should_wrap',False):
+                n_wrap += 1
 
+        print(f"n_wrap {n_wrap}")
+            
     #    for x in model.parameters():
     #        assert fake.is_fake(x)
 
         def init_fn(module):
            # print(f"materializing {module}")
-            try:
-                is_meta = fake.is_fake(next(module.parameters()))
-            except StopIteration:
-                is_meta = False
-            if is_meta:
-                deferred_init.materialize_module(module)
+           deferred_init.materialize_module(module)
+           return
+           # try:
+           #     is_meta = fake.is_fake(next(module.parameters()))
+           # except StopIteration:
+           #     is_meta = False
+           # if is_meta:
+           #     deferred_init.materialize_module(module)
+           #     torch.cat([p.detach().reshape(-1) for p in module.parameters()])
 
-        pol = wrap_if_annotated
+        #pol = default
+        cnt = 0 
+        bad = 0
+        def my_policy(module, *args, **kwargs):
+            ret = getattr(module, '_should_wrap', False)
+            if ret:
+                nonlocal cnt
+                cnt+=1
+                if dist.get_rank() == 0: print(f"num true: {cnt}")
+            else:
+                nonlocal bad
+                bad+=1
+                if dist.get_rank() == 0:
+                    print(f"num false: {bad}")
+            return ret
+
+        pol = my_policy
+#        pol = default
+        dist.barrier()
+        torch.cuda.synchronize()
         fsdp_model = FSDP(model, fsdp_auto_wrap_policy=pol, param_init_fns=init_fn)
         init_deferred_end.record()
         sec_conversion = 1000
