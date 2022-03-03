@@ -19,19 +19,24 @@ from models import ShardedGPT, GPTSmallConfig, GPTLargeConfig, GPTXLConfig, GPTX
 _VOCAB_SIZE = 3072
 _BLOCK_SIZE = 128
 
+def init_fn(module):
+    deferred_init.materialize_module(module)
+
 def _deferred_gpt(cfg):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
     gpt = deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device())
-    gpt._should_wrap = True
-    instances_to_wrap = 0
-    for module in gpt.modules():
-        if getattr(module, '_should_wrap', False):
-            instances_to_wrap += 1
-
-    #raise ValueError(instances_to_wrap)
     return gpt
+
+def _deferred_gpt_wrap(cfg):
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
+    with enable_wrap(wrapper_cls=FSDP, param_init_fns=init_fn):
+        return deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device())
+#        return deferred_init.deferred_init(ShardedGPT(config=ct,device=torch.cuda.current_device()))
+#        return wrap(deferred_init.deferred_init(ShardedGPT(config=ct, device=torch.cuda.current_device())))
 
 def _regular_gpt_big(cfg):
     torch.manual_seed(0)
@@ -87,6 +92,7 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
             raise ValueError("Unexpected?")
     #        fsdp_regular = FSDP(regular, fsdp_auto_wrap_policy=wrap_if_annotated)
         init_regular_end.record()
+        torch.cuda.synchronize()
         sec_conversion = 1000
         regular_time = init_regular_start.elapsed_time(init_regular_end) / sec_conversion
         total_fsdp_modules = 0
@@ -101,49 +107,12 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
     def run_deferred():
         init_deferred_start.record()
         model = deferred_lambda()
-        n_wrap = 0
-        for m in model.modules():
-            if getattr(m, '_should_wrap',False):
-                n_wrap += 1
-
-        print(f"n_wrap {n_wrap}")
-            
-    #    for x in model.parameters():
-    #        assert fake.is_fake(x)
-
-        def init_fn(module):
-           # print(f"materializing {module}")
-           deferred_init.materialize_module(module)
-           return
-           # try:
-           #     is_meta = fake.is_fake(next(module.parameters()))
-           # except StopIteration:
-           #     is_meta = False
-           # if is_meta:
-           #     deferred_init.materialize_module(module)
-           #     torch.cat([p.detach().reshape(-1) for p in module.parameters()])
-
-        #pol = default
-        cnt = 0 
-        bad = 0
-        def my_policy(module, *args, **kwargs):
-            ret = getattr(module, '_should_wrap', False)
-            if ret:
-                nonlocal cnt
-                cnt+=1
-                if dist.get_rank() == 0: print(f"num true: {cnt}")
-            else:
-                nonlocal bad
-                bad+=1
-                if dist.get_rank() == 0:
-                    print(f"num false: {bad}")
-            return ret
-
-        pol = my_policy
-#        pol = default
-        dist.barrier()
-        torch.cuda.synchronize()
-        fsdp_model = FSDP(model, fsdp_auto_wrap_policy=pol, param_init_fns=init_fn)
+        pol = default
+        if not isinstance(model, FSDP):
+            fsdp_model = FSDP(model, param_init_fns=init_fn)
+#            fsdp_model = FSDP(model, fsdp_auto_wrap_policy=pol, param_init_fns=init_fn)
+        else:
+            fsdp_model = model
         init_deferred_end.record()
         sec_conversion = 1000
         deferred_time = init_deferred_start.elapsed_time(init_deferred_end) / sec_conversion
@@ -213,8 +182,10 @@ def worker(rank):
 #    d = _deferred_lambda
 #    r = _regular_lambda
 
-    gpt_config= GPTXXXLConfig
-    d = partial(_deferred_gpt, cfg=gpt_config)
+#    gpt_config= GPTXXXLConfig
+    gpt_config = GPT13BConfig
+#    d = partial(_deferred_gpt, cfg=gpt_config)
+    d = partial(_deferred_gpt_wrap, cfg=gpt_config)
     r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)
 #    run_test_with_meta()
