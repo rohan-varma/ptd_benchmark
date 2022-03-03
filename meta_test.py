@@ -20,7 +20,7 @@ _VOCAB_SIZE = 3072
 _BLOCK_SIZE = 128
 
 def init_fn(module):
-    deferred_init.materialize_module(module)
+    deferred_init.materialize_module(module, recurse=False)
 
 def _deferred_gpt(cfg):
     torch.manual_seed(0)
@@ -34,7 +34,7 @@ def _deferred_gpt_wrap(cfg):
     torch.cuda.manual_seed(0)
     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
     with enable_wrap(wrapper_cls=FSDP, param_init_fns=init_fn):
-        return deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device())
+        return wrap(deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device()))
 #        return deferred_init.deferred_init(ShardedGPT(config=ct,device=torch.cuda.current_device()))
 #        return wrap(deferred_init.deferred_init(ShardedGPT(config=ct, device=torch.cuda.current_device())))
 
@@ -44,6 +44,12 @@ def _regular_gpt_big(cfg):
     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
     with enable_wrap(wrapper_cls=FSDP):
         return wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
+
+def _regular_gpt_big_wrap_everything(cfg):
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
+    return FSDP(ShardedGPT(config=ct, device=torch.cuda.current_device()), fsdp_auto_wrap_policy=default)
 
 def _regular_gpt(cfg):
     torch.manual_seed(0)
@@ -99,9 +105,9 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
         for module in fsdp_regular.modules():
             if isinstance(module, FSDP):
                 total_fsdp_modules+= 1
-        print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
+        if dist.get_rank() == 0: print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
 
-    #run_regular()
+    run_regular()
     dist.barrier()
     torch.cuda.synchronize()
     def run_deferred():
@@ -109,8 +115,8 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
         model = deferred_lambda()
         pol = default
         if not isinstance(model, FSDP):
-            fsdp_model = FSDP(model, param_init_fns=init_fn)
-#            fsdp_model = FSDP(model, fsdp_auto_wrap_policy=pol, param_init_fns=init_fn)
+            #fsdp_model = FSDP(model, param_init_fns=init_fn)
+            fsdp_model = FSDP(model, fsdp_auto_wrap_policy=pol, param_init_fns=init_fn)
         else:
             fsdp_model = model
         init_deferred_end.record()
@@ -120,8 +126,11 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
         for module in fsdp_model.modules():
             if isinstance(module, FSDP):
                 total_fsdp_modules += 1
-        print(f"deferred build time: {deferred_time} sec {deferred_time / total_fsdp_modules} per fsdp instance, {total_fsdp_modules} instances")
+        if dist.get_rank() == 0: print(f"deferred build time: {deferred_time} sec {deferred_time / total_fsdp_modules} per fsdp instance, {total_fsdp_modules} instances")
         #print(fsdp_model)
+        for p in fsdp_model.parameters():
+            assert not fake.is_fake(p)
+        print(" -- nothing is fake --")
 
     run_deferred()
     print("Initialized both FSDP models")
@@ -182,11 +191,13 @@ def worker(rank):
 #    d = _deferred_lambda
 #    r = _regular_lambda
 
-#    gpt_config= GPTXXXLConfig
-    gpt_config = GPT13BConfig
-#    d = partial(_deferred_gpt, cfg=gpt_config)
-    d = partial(_deferred_gpt_wrap, cfg=gpt_config)
-    r = partial(_regular_gpt_big, cfg=gpt_config)
+    gpt_config= GPTXXXLConfig
+#    gpt_config = GPT13BConfig
+#    gpt_config = GPT175BConfig
+    d = partial(_deferred_gpt, cfg=gpt_config)
+    r = partial(_regular_gpt_big_wrap_everything, cfg=gpt_config)
+#    d = partial(_deferred_gpt_wrap, cfg=gpt_config)
+#    r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)
 #    run_test_with_meta()
 
