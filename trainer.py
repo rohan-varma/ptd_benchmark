@@ -34,7 +34,7 @@ from torch.distributed.pipeline.sync import Pipe
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
 from torch.distributed.fsdp.wrap import enable_wrap, wrap
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, CPUOffload
-from torch.distributed.fsdp.fully_sharded_data_parallel import BackwardPrefetch_
+from torch.distributed.fsdp.fully_sharded_data_parallel import BackwardPrefetch
 from fairscale.nn.data_parallel import FullyShardedDataParallel as fairscale_fsdp
 
 @dataclass
@@ -175,6 +175,12 @@ def parse_args():
         type=bool,
         default=False,
         help="meta module"
+    )
+    parser.add_argument(
+        "--init_only",
+        type=bool,
+        default=False,
+        help="return just after initializng"
     )
 
     return parser.parse_args()
@@ -348,7 +354,10 @@ def train(args):
         print(f"Building model time: {init_start_event.elapsed_time(init_end_event) / 1000}sec")
         print(f"{model}")
 
+
     print_memory_summary("After model init", "cuda:0")
+    if args.init_only:
+        return
 
     # build dummy inputs
     if "GPT" in args.model:
