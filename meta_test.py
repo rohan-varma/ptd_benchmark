@@ -24,12 +24,13 @@ def _deferred_gpt(cfg):
     torch.cuda.manual_seed(0)
     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
     gpt = deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device())
+    gpt._should_wrap = True
     instances_to_wrap = 0
     for module in gpt.modules():
         if getattr(module, '_should_wrap', False):
             instances_to_wrap += 1
 
-    raise ValueError(instances_to_wrap)
+    #raise ValueError(instances_to_wrap)
     return gpt
 
 def _regular_gpt_big(cfg):
@@ -76,48 +77,56 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
 
     # Test to make sure it is the same model parameters as regular FSDP
     # approach.
-    init_regular_start.record()
-    regular = regular_lambda()
-    #regular.apply(init_fn)
-    if isinstance(regular, FSDP):
-        fsdp_regular = regular
-    else:
-        fsdp_regular = FSDP(regular, fsdp_auto_wrap_policy=default)
-    init_regular_end.record()
-    sec_conversion = 1000
-    regular_time = init_regular_start.elapsed_time(init_regular_end) / sec_conversion
-    total_fsdp_modules = 0
-    for module in fsdp_regular.modules():
-        if isinstance(module, FSDP):
-            total_fsdp_modules+= 1
-    print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
+    def run_regular():
+        init_regular_start.record()
+        regular = regular_lambda()
+        #regular.apply(init_fn)
+        if isinstance(regular, FSDP):
+            fsdp_regular = regular
+        else:
+            raise ValueError("Unexpected?")
+    #        fsdp_regular = FSDP(regular, fsdp_auto_wrap_policy=wrap_if_annotated)
+        init_regular_end.record()
+        sec_conversion = 1000
+        regular_time = init_regular_start.elapsed_time(init_regular_end) / sec_conversion
+        total_fsdp_modules = 0
+        for module in fsdp_regular.modules():
+            if isinstance(module, FSDP):
+                total_fsdp_modules+= 1
+        print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
+
+    #run_regular()
     dist.barrier()
     torch.cuda.synchronize()
-    init_deferred_start.record()
-    model = deferred_lambda()
+    def run_deferred():
+        init_deferred_start.record()
+        model = deferred_lambda()
 
-#    for x in model.parameters():
-#        assert fake.is_fake(x)
+    #    for x in model.parameters():
+    #        assert fake.is_fake(x)
 
-    def init_fn(module):
-       # print(f"materializing {module}")
-        try:
-            is_meta = fake.is_fake(next(module.parameters()))
-        except StopIteration:
-            is_meta = False
-        if is_meta:
-            deferred_init.materialize_module(module)
+        def init_fn(module):
+           # print(f"materializing {module}")
+            try:
+                is_meta = fake.is_fake(next(module.parameters()))
+            except StopIteration:
+                is_meta = False
+            if is_meta:
+                deferred_init.materialize_module(module)
 
-    fsdp_model = FSDP(model, fsdp_auto_wrap_policy=default, param_init_fns=init_fn)
-    init_deferred_end.record()
-    deferred_time = init_deferred_start.elapsed_time(init_deferred_end) / sec_conversion
-    total_fsdp_modules = 0
-    for module in fsdp_model.modules():
-        if isinstance(module, FSDP):
-            total_fsdp_modules += 1
-    print(f"deferred build time: {deferred_time} sec {deferred_time / total_fsdp_modules} per fsdp instance, {total_fsdp_modules} instances")
-    #print(fsdp_model)
+        pol = wrap_if_annotated
+        fsdp_model = FSDP(model, fsdp_auto_wrap_policy=pol, param_init_fns=init_fn)
+        init_deferred_end.record()
+        sec_conversion = 1000
+        deferred_time = init_deferred_start.elapsed_time(init_deferred_end) / sec_conversion
+        total_fsdp_modules = 0
+        for module in fsdp_model.modules():
+            if isinstance(module, FSDP):
+                total_fsdp_modules += 1
+        print(f"deferred build time: {deferred_time} sec {deferred_time / total_fsdp_modules} per fsdp instance, {total_fsdp_modules} instances")
+        #print(fsdp_model)
 
+    run_deferred()
     print("Initialized both FSDP models")
     return
     for m1, m2 in zip(fsdp_model.modules(), fsdp_regular.modules()):
@@ -176,7 +185,7 @@ def worker(rank):
 #    d = _deferred_lambda
 #    r = _regular_lambda
 
-    gpt_config= GPT13BConfig
+    gpt_config= GPTXXXLConfig
     d = partial(_deferred_gpt, cfg=gpt_config)
     r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)
