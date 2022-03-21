@@ -20,7 +20,9 @@ _VOCAB_SIZE = 3072
 _BLOCK_SIZE = 128
 
 def init_fn(module):
-    deferred_init.materialize_module(module, recurse=False)
+    assert not isinstance(module, FSDP)
+    check_fn = lambda k: not isinstance(k, FSDP)
+    deferred_init.materialize_module(module, check_fn=check_fn)
 
 def _deferred_gpt(cfg):
     torch.manual_seed(0)
@@ -107,7 +109,7 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
                 total_fsdp_modules+= 1
         if dist.get_rank() == 0: print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
 
-    run_regular()
+    #run_regular()
     dist.barrier()
     torch.cuda.synchronize()
     def run_deferred():
@@ -191,12 +193,12 @@ def worker(rank):
 #    d = _deferred_lambda
 #    r = _regular_lambda
 
-    gpt_config= GPTXXXLConfig
-#    gpt_config = GPT13BConfig
+#    gpt_config= GPTXXXLConfig
+    gpt_config = GPT13BConfig
 #    gpt_config = GPT175BConfig
-    d = partial(_deferred_gpt, cfg=gpt_config)
+#    d = partial(_deferred_gpt, cfg=gpt_config)
     r = partial(_regular_gpt_big_wrap_everything, cfg=gpt_config)
-#    d = partial(_deferred_gpt_wrap, cfg=gpt_config)
+    d = partial(_deferred_gpt_wrap, cfg=gpt_config)
 #    r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)
 #    run_test_with_meta()
