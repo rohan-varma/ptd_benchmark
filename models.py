@@ -253,8 +253,8 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd, device=device, dtype=dtype)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False, device=device, dtype=dtype)
-
-        logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
+        if torch.distributed.get_rank() == 0:
+            logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
     def forward(self, idx):
         x = self.emb_stem(idx)

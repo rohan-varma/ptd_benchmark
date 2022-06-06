@@ -12,12 +12,13 @@ from torch.distributed.fsdp.wrap import always_wrap_policy as default
 #from torch.distributed.fsdp.wrap import wrap_if_annotated
 from torch.distributed.fsdp.wrap import wrap, enable_wrap
 
-#import torchdistx
-#from torchdistx import fake, deferred_init
+import torchdistx
+from torchdistx import fake, deferred_init
 from models import ShardedGPT, GPTSmallConfig, GPTLargeConfig, GPTXLConfig, GPTXXLConfig, GPTXXXLConfig, GPT13BConfig, GPT175BConfig
 
 _VOCAB_SIZE = 3072
 _BLOCK_SIZE = 128
+_SEC_CONVERSION = 1000
 
 def init_fn(module):
     assert not isinstance(module, FSDP)
@@ -28,7 +29,22 @@ def _deferred_gpt(cfg):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
+    start_ev = torch.cuda.Event(enable_timing=True)
+    end_ev = torch.cuda.Event(enable_timing=True)
+    start_ev.record()
     gpt = deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device())
+    end_ev.record()
+    torch.cuda.synchronize()
+    difftime = start_ev.elapsed_time(end_ev) / 1000
+    if dist.get_rank() == 0: print(f"just deferred init took {difftime} ")
+    start_ev = torch.cuda.Event(enable_timing=True)
+    end_ev = torch.cuda.Event(enable_timing=True)
+    start_ev.record()
+    gpt = FSDP(gpt, auto_wrap_policy=default)
+    end_ev.record()
+    torch.cuda.synchronize()
+    difftime = start_ev.elapsed_time(end_ev) / 1000
+    if dist.get_rank() == 0: print(f"FSDP wrap after deferred init took {difftime} ")
     return gpt
 
 def _deferred_gpt_wrap(cfg):
@@ -49,17 +65,28 @@ def _regular_gpt_big(cfg):
     pg = dist.new_group(backend="nccl", timeout=timedelta(seconds=75))
 #    print(" -- creating model --")
     s = time.time()
-    model = ShardedGPT(config=ct, device=torch.device("cpu"))
-    e = time.time()
-    print(f" -- created plain model in {e-s}, wrapping now --")
+    start_ev = torch.cuda.Event(enable_timing=True)
+    end_ev = torch.cuda.Event(enable_timing=True)
+    start_ev.record()
+    model = ShardedGPT(config=ct, device="cpu")
+    model.cpu()
+    end_ev.record()
     torch.cuda.synchronize()
-    start = time.time()
-    model = FSDP(model, auto_wrap_policy=default)
+    difftime = start_ev.elapsed_time(end_ev) / 1000
+    if dist.get_rank() == 0:
+        print(f" -- created plain model in {difftime}, wrapping now --")
     torch.cuda.synchronize()
-    end = time.time()
-    taken = end - start
+    se, ee = torch.cuda.Event(enable_timing=True),torch.cuda.Event(enable_timing=True)
+    se.record()
+    model = FSDP(model, auto_wrap_policy=default, device_id=torch.cuda.current_device())
+    ee.record()
+    torch.cuda.synchronize()
+    difftime = se.elapsed_time(ee) / 1000
+    taken =difftime
     #model = FSDP(ShardedGPT(config=ct, device=torch.device("cpu")), auto_wrap_policy=default)
-    print(f"Created fsdp model wrapping everything. Took {taken}")
+    if dist.get_rank() == 0:
+        print(f"Created fsdp model wrapping everything. Took {taken}")
+    return model
     exit(0)
 #    model = ShardedGPT(config=ct, device=torch.device("cpu"))
 #    print("created model not FSDP")
@@ -130,11 +157,12 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
                 total_fsdp_modules+= 1
         if dist.get_rank() == 0: print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
 
-    print(" -- starting regular --")
+#    print(" -- starting regular --")
+    if dist.get_rank() == 0: print("starting regualr", flush=True)
     run_regular()
     dist.barrier()
     torch.cuda.synchronize()
-    return
+    # return
     def run_deferred():
         init_deferred_start.record()
         model = deferred_lambda()
@@ -146,6 +174,7 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
             fsdp_model = model
         init_deferred_end.record()
         sec_conversion = 1000
+        torch.cuda.synchronize()
         deferred_time = init_deferred_start.elapsed_time(init_deferred_end) / sec_conversion
         total_fsdp_modules = 0
         for module in fsdp_model.modules():
@@ -155,10 +184,11 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
         #print(fsdp_model)
         for p in fsdp_model.parameters():
             assert not fake.is_fake(p)
-        print(" -- nothing is fake --")
+#        print(" -- nothing is fake --")
 
     run_deferred()
-    print("Initialized both FSDP models")
+    if dist.get_rank() == 0:
+        print("Initialized both FSDP models")
     return
     for m1, m2 in zip(fsdp_model.modules(), fsdp_regular.modules()):
         p1 = list(m1.parameters())
@@ -218,7 +248,7 @@ def worker(rank):
     port = os.environ["MASTER_PORT"]
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     os.environ["NCCL_BLOCKING_WAIT"] = "1"
-    os.environ["NCCL_DEBUG"] = "INFO"
+#    os.environ["NCCL_DEBUG"] = "INFO"
     try:
         ifname = os.environ["NCCL_SOCKET_IFNAME"]
     except:
@@ -230,18 +260,18 @@ def worker(rank):
     dist.init_process_group("nccl", rank=rank, world_size=global_ws)
     print(f"DOne init for local {rank}, global {global_rank}", flush=True)
     dist.barrier()
-    return
+    # return
 #    d = _deferred_lambda
 #    r = _regular_lambda
 
-    gpt_config= GPTXXXLConfig
-    #gpt_config = GPTSmallConfig
+    #gpt_config= GPTXXXLConfig
+    #gpt_config = GPTXXXLConfig
 #    gpt_config = GPTLargeConfig
-    #gpt_config = GPT13BConfig
+    gpt_config = GPT13BConfig
 #    gpt_config = GPT175BConfig
 #    d = partial(_deferred_gpt, cfg=gpt_config)
     r = partial(_regular_gpt_big, cfg=gpt_config)
-    d = partial(_deferred_gpt_wrap, cfg=gpt_config)
+    d = partial(_deferred_gpt, cfg=gpt_config)
 #    r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)
 #    run_test_with_meta()
