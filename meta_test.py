@@ -9,11 +9,11 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import always_wrap_policy as default
-from torch.distributed.fsdp.wrap import wrap_if_annotated
+#from torch.distributed.fsdp.wrap import wrap_if_annotated
 from torch.distributed.fsdp.wrap import wrap, enable_wrap
 
-import torchdistx
-from torchdistx import fake, deferred_init
+#import torchdistx
+#from torchdistx import fake, deferred_init
 from models import ShardedGPT, GPTSmallConfig, GPTLargeConfig, GPTXLConfig, GPTXXLConfig, GPTXXXLConfig, GPT13BConfig, GPT175BConfig
 
 _VOCAB_SIZE = 3072
@@ -35,16 +35,37 @@ def _deferred_gpt_wrap(cfg):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
-    with enable_wrap(wrapper_cls=FSDP, param_init_fns=init_fn):
+    with enable_wrap(wrapper_cls=FSDP):
         return wrap(deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device()))
 #        return deferred_init.deferred_init(ShardedGPT(config=ct,device=torch.cuda.current_device()))
 #        return wrap(deferred_init.deferred_init(ShardedGPT(config=ct, device=torch.cuda.current_device())))
 
 def _regular_gpt_big(cfg):
+    import time
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
-    with enable_wrap(wrapper_cls=FSDP):
+    from datetime import timedelta
+    pg = dist.new_group(backend="nccl", timeout=timedelta(seconds=75))
+#    print(" -- creating model --")
+    s = time.time()
+    model = ShardedGPT(config=ct, device=torch.device("cpu"))
+    e = time.time()
+    print(f" -- created plain model in {e-s}, wrapping now --")
+    torch.cuda.synchronize()
+    start = time.time()
+    model = FSDP(model, auto_wrap_policy=default)
+    torch.cuda.synchronize()
+    end = time.time()
+    taken = end - start
+    #model = FSDP(ShardedGPT(config=ct, device=torch.device("cpu")), auto_wrap_policy=default)
+    print(f"Created fsdp model wrapping everything. Took {taken}")
+    exit(0)
+#    model = ShardedGPT(config=ct, device=torch.device("cpu"))
+#    print("created model not FSDP")
+    return model
+    with enable_wrap(wrapper_cls=FSDP, process_group=pg):
+    #    return wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
         return wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
 
 def _regular_gpt_big_wrap_everything(cfg):
@@ -109,9 +130,11 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
                 total_fsdp_modules+= 1
         if dist.get_rank() == 0: print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
 
-    #run_regular()
+    print(" -- starting regular --")
+    run_regular()
     dist.barrier()
     torch.cuda.synchronize()
+    return
     def run_deferred():
         init_deferred_start.record()
         model = deferred_lambda()
@@ -188,24 +211,47 @@ def run_test_with_meta():
     print(f"Initialized FSDP model")
 
 def worker(rank):
-    dist.init_process_group("nccl", rank=rank, world_size=8)
     torch.cuda.set_device(rank)
+    global_rank = os.environ["RANK"]
+    global_ws = int(os.environ["WORLD_SIZE"]) * 8
+    addr = os.environ["MASTER_ADDR"]
+    port = os.environ["MASTER_PORT"]
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    os.environ["NCCL_BLOCKING_WAIT"] = "1"
+    os.environ["NCCL_DEBUG"] = "INFO"
+    try:
+        ifname = os.environ["NCCL_SOCKET_IFNAME"]
+    except:
+        ifname ="not set"
+    print(
+        f"init for local rank {rank} global {global_rank} ws={global_ws},{addr} {port}, {ifname}",
+        flush=True
+    )
+    dist.init_process_group("nccl", rank=rank, world_size=global_ws)
+    print(f"DOne init for local {rank}, global {global_rank}", flush=True)
+    dist.barrier()
+    return
 #    d = _deferred_lambda
 #    r = _regular_lambda
 
-#    gpt_config= GPTXXXLConfig
-    gpt_config = GPT13BConfig
+    gpt_config= GPTXXXLConfig
+    #gpt_config = GPTSmallConfig
+#    gpt_config = GPTLargeConfig
+    #gpt_config = GPT13BConfig
 #    gpt_config = GPT175BConfig
 #    d = partial(_deferred_gpt, cfg=gpt_config)
-    r = partial(_regular_gpt_big_wrap_everything, cfg=gpt_config)
+    r = partial(_regular_gpt_big, cfg=gpt_config)
     d = partial(_deferred_gpt_wrap, cfg=gpt_config)
 #    r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)
 #    run_test_with_meta()
 
+def main():
+    pass
 
 
 if __name__ == "__main__":
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29501"
+    # os.environ["WORLD_SIZE"] = "2"
+    print("script invoked")
+    # exit(0)
     mp.spawn(worker, nprocs=8, args=())

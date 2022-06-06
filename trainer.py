@@ -35,7 +35,7 @@ from torch.profiler import profile, record_function, ProfilerActivity, tensorboa
 from torch.distributed.fsdp.wrap import enable_wrap, wrap
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, CPUOffload
 from torch.distributed.fsdp.fully_sharded_data_parallel import BackwardPrefetch
-from fairscale.nn.data_parallel import FullyShardedDataParallel as fairscale_fsdp
+#from fairscale.nn.data_parallel import FullyShardedDataParallel as fairscale_fsdp
 
 @dataclass
 class TrainConfig:
@@ -250,10 +250,10 @@ def build_fsdp_model(args):
 
     cpu_offload_config = None
     if args.cpu_offload:
-        if rank == 0: 
+        if rank == 0:
             print("Enabling cpu offloading")
         cpu_offload_config = CPUOffload(offload_params=True)
-    
+
     backward_prefetch = None
     if args.prefetch == "prehook":
         backward_prefetch = BackwardPrefetch_.BACKWARD_PRE
@@ -402,7 +402,7 @@ def train(args):
         on_trace_ready=my_tensorboard_trace_handler(f"tb/{now.strftime('%Y_%m_%d_%H_%M_%S')}", rank, use_gzip=True)
     ) if args.profile else contextlib.nullcontext() as prof:
         for i in range(n_iters):
-            before_forward_event.record()           
+            before_forward_event.record()
             out = model(inputs)
             after_forward_event.record()
             loss = out.sum() if isinstance(out, torch.Tensor) else out.local_value().sum()
