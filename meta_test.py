@@ -8,7 +8,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp.wrap import always_wrap_policy as default
+FullyShardedDataParallel = FSDP
+from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy as default
 #from torch.distributed.fsdp.wrap import wrap_if_annotated
 from torch.distributed.fsdp.wrap import wrap, enable_wrap
 
@@ -16,10 +17,18 @@ import torchdistx
 from torchdistx import fake, deferred_init
 from models import ShardedGPT, GPTSmallConfig, GPTLargeConfig, GPTXLConfig, GPTXXLConfig, GPTXXXLConfig, GPT13BConfig, GPT175BConfig
 
+def sync_all_device():
+
+    # setup() has already configured CUDA_VISIBLE_DEVICES such that each
+    # process exclusively works on its own set of devices. So it's safe to
+    # do device sync here
+    for d in range(torch.cuda.device_count()):
+        torch.cuda.synchronize(d)
+
 _VOCAB_SIZE = 3072
 _BLOCK_SIZE = 128
 _SEC_CONVERSION = 1000
-
+# inputs = torch.randint(0, args.vocab_size, (args.batch_size, args.block_size), device="cuda:0")
 def init_fn(module):
     assert not isinstance(module, FSDP)
     check_fn = lambda k: not isinstance(k, FSDP)
@@ -47,12 +56,12 @@ def _deferred_gpt(cfg):
     if dist.get_rank() == 0: print(f"FSDP wrap after deferred init took {difftime} ")
     return gpt
 
-def _deferred_gpt_wrap(cfg):
-    torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
-    with enable_wrap(wrapper_cls=FSDP):
-        return wrap(deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device()))
+# def _deferred_gpt_wrap(cfg):
+#     torch.manual_seed(0)
+#     torch.cuda.manual_seed(0)
+#     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
+#     with enable_wrap(wrapper_cls=FSDP):
+#         return wrap(deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device()))
 #        return deferred_init.deferred_init(ShardedGPT(config=ct,device=torch.cuda.current_device()))
 #        return wrap(deferred_init.deferred_init(ShardedGPT(config=ct, device=torch.cuda.current_device())))
 
@@ -68,8 +77,8 @@ def _regular_gpt_big(cfg):
     start_ev = torch.cuda.Event(enable_timing=True)
     end_ev = torch.cuda.Event(enable_timing=True)
     start_ev.record()
-    model = ShardedGPT(config=ct, device="cpu")
-    model.cpu()
+    model = ShardedGPT(config=ct, device=torch.cuda.current_device())
+    # model.cpu()
     end_ev.record()
     torch.cuda.synchronize()
     difftime = start_ev.elapsed_time(end_ev) / 1000
@@ -95,18 +104,18 @@ def _regular_gpt_big(cfg):
     #    return wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
         return wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
 
-def _regular_gpt_big_wrap_everything(cfg):
-    torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
-    return FSDP(ShardedGPT(config=ct, device=torch.cuda.current_device()), fsdp_auto_wrap_policy=default)
+# def _regular_gpt_big_wrap_everything(cfg):
+#     torch.manual_seed(0)
+#     torch.cuda.manual_seed(0)
+#     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
+#     return FSDP(ShardedGPT(config=ct, device=torch.cuda.current_device()), fsdp_auto_wrap_policy=default)
 
-def _regular_gpt(cfg):
-    torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
-    gpt = ShardedGPT(config=ct, device=torch.cuda.current_device())
-    return gpt
+# def _regular_gpt(cfg):
+#     torch.manual_seed(0)
+#     torch.cuda.manual_seed(0)
+#     ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
+#     gpt = ShardedGPT(config=ct, device=torch.cuda.current_device())
+#     return gpt
 
 class MyModel(nn.Module):
     def __init__(self, device):
@@ -120,13 +129,13 @@ class MyModel(nn.Module):
         return self.lin2(self.lin1(x))
 
 
-def _deferred_lambda():
-    model = deferred_init.deferred_init(MyModel, "cuda")
-    return model
+# def _deferred_lambda():
+#     model = deferred_init.deferred_init(MyModel, "cuda")
+#     return model
 
-def _regular_lambda():
-    regular = MyModel(device="cuda")
-    return regular
+# def _regular_lambda():
+#     regular = MyModel(device="cuda")
+#     return regular
 
 def run_test_with_deferred(deferred_lambda, regular_lambda):
     # Create model with deffered_init API
@@ -141,7 +150,7 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
     def run_regular():
         init_regular_start.record()
         regular = regular_lambda()
-        #regular.apply(init_fn)
+#        regular.apply(init_fn)
         if isinstance(regular, FSDP):
             fsdp_regular = regular
         else:
@@ -156,10 +165,12 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
             if isinstance(module, FSDP):
                 total_fsdp_modules+= 1
         if dist.get_rank() == 0: print(f"regular build time: {regular_time} sec {regular_time / total_fsdp_modules} per FSDP instance, {total_fsdp_modules} instances")
+        assert isinstance(fsdp_regular, FullyShardedDataParallel)
+        return fsdp_regular
 
 #    print(" -- starting regular --")
     if dist.get_rank() == 0: print("starting regualr", flush=True)
-    run_regular()
+#    fsdp_regular = run_regular()
     dist.barrier()
     torch.cuda.synchronize()
     # return
@@ -175,6 +186,7 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
         init_deferred_end.record()
         sec_conversion = 1000
         torch.cuda.synchronize()
+        dist.barrier()
         deferred_time = init_deferred_start.elapsed_time(init_deferred_end) / sec_conversion
         total_fsdp_modules = 0
         for module in fsdp_model.modules():
@@ -183,62 +195,46 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
         if dist.get_rank() == 0: print(f"deferred build time: {deferred_time} sec {deferred_time / total_fsdp_modules} per fsdp instance, {total_fsdp_modules} instances")
         #print(fsdp_model)
         for p in fsdp_model.parameters():
-            assert not fake.is_fake(p)
+            assert not fake.is_fake(p) and not fake.is_fake(p.data)
+        assert isinstance(fsdp_model, FullyShardedDataParallel)
+        if dist.get_rank() == 0:
+            print(" --- META device is validated nothing is fake", flush=True)
+        return fsdp_model
 #        print(" -- nothing is fake --")
 
-    run_deferred()
+    import time
+    start = time.time()
+    dist.barrier()
+    fsdp_model = run_deferred()
+    torch.cuda.synchronize()
+    dist.barrier()
+    end = time.time()
+    k = end - start
+    print(f"Rank {dist.get_rank()} time: {k}", flush=True)
     if dist.get_rank() == 0:
         print("Initialized both FSDP models")
+    # for m1, m2 in zip(fsdp_model.modules(), fsdp_regular.modules()):
+    #     p1 = list(m1.parameters())
+    #     p2 = list(m2.parameters())
+    #     for x, y in zip(p1, p2):
+    #         assert torch.allclose(x, y), f"{x} {y} "
+
+    # print(f"Initialized FSDP model, verified all params are equal!", flush=True)
+    dist.barrier()
+    print(f"Rank {dist.get_rank()} starting forward pass", flush=True)
+    # run deferred fwd + backward
+    # torch.randint(0, args.vocab_size, (args.batch_size, args.block_size), device="cuda:0")
+    inputs = torch.randint(0, _VOCAB_SIZE, (1, _BLOCK_SIZE), device=torch.cuda.current_device())
+    out = fsdp_model(inputs).sum()
+    out.backward()
+#    sync_all_device()
+    dist.barrier()
+    torch.cuda.synchronize()
+    print("Fwd + backward ran")
     return
-    for m1, m2 in zip(fsdp_model.modules(), fsdp_regular.modules()):
-        p1 = list(m1.parameters())
-        p2 = list(m2.parameters())
-        for x, y in zip(p1, p2):
-            assert torch.allclose(x, y), f"{x} {y} "
+    # print("ran fwd + backward")
 
-    print(f"Initialized FSDP model, verified all params are equal!")
 
-def run_test_with_meta():
-    model = MyModel(device="meta")
-    assert next(model.lin1.parameters()).is_meta
-    assert next(model.lin2.parameters()).is_meta
-
-    def init_fn(module):
-        is_meta = any(t.is_meta for t in module.parameters())
-        if is_meta: module.to_empty(device=torch.cuda.current_device())
-        torch.manual_seed(0)
-        torch.cuda.manual_seed(0)
-        try:
-            with torch.no_grad():
-                module.reset_parameters()
-        except BaseException:
-            pass
-
-    # Eventually the API will be as simple as FSDP(
-    #    model,
-    #    fsdp_auto_wrap_policy=auto_wrap_policy
-    # )
-    # where we will use materialize_module() API to initialize the module
-    fsdp_model = FSDP(
-        model,
-        fsdp_auto_wrap_policy=default,
-        param_init_fns=init_fn,
-    )
-    print(fsdp_model)
-
-    # Test to make sure it is the same model parameters as regular FSDP
-    # approach.
-    regular = MyModel(device="cuda")
-    regular.apply(init_fn)
-    fsdp_regular = FSDP(regular, fsdp_auto_wrap_policy=default)
-
-    for m1, m2 in zip(fsdp_model.modules(), fsdp_regular.modules()):
-        p1 = list(m1.parameters())
-        p2 = list(m2.parameters())
-        for x, y in zip(p1, p2):
-            assert torch.allclose(x, y), f"{x} {y} "
-
-    print(f"Initialized FSDP model")
 
 def worker(rank):
     torch.cuda.set_device(rank)
@@ -268,12 +264,18 @@ def worker(rank):
     #gpt_config = GPTXXXLConfig
 #    gpt_config = GPTLargeConfig
     gpt_config = GPT13BConfig
+    gpt_config=GPTSmallConfig
+    gpt_config = GPTXXXLConfig
+    gpt_config = GPT13BConfig
+    gpt_config = GPTSmallConfig
+    gpt_config = GPTXXXLConfig
 #    gpt_config = GPT175BConfig
 #    d = partial(_deferred_gpt, cfg=gpt_config)
     r = partial(_regular_gpt_big, cfg=gpt_config)
     d = partial(_deferred_gpt, cfg=gpt_config)
 #    r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)
+    exit(0)
 #    run_test_with_meta()
 
 def main():
