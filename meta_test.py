@@ -3,8 +3,10 @@
 import os
 
 import torch
+import time
 from functools import partial
 import torch.distributed as dist
+from datetime import timedelta
 import torch.multiprocessing as mp
 import torch.nn as nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -64,6 +66,18 @@ def _deferred_gpt(cfg):
 #         return wrap(deferred_init.deferred_init(ShardedGPT, config=ct, device=torch.cuda.current_device()))
 #        return deferred_init.deferred_init(ShardedGPT(config=ct,device=torch.cuda.current_device()))
 #        return wrap(deferred_init.deferred_init(ShardedGPT(config=ct, device=torch.cuda.current_device())))
+
+def _regular_gpt_wrap(cfg):
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    ct = cfg(vocab_size=_VOCAB_SIZE, block_size=_BLOCK_SIZE)
+    pg = dist.new_group(backend="nccl", timeout=timedelta(seconds=75))
+    start = time.time()
+    with enable_wrap(wrapper_cls=FSDP, process_group=pg):
+        return wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
+    torch.cuda.synchronize()
+    end = time.time()
+    if dist.get_rank() == 0: print(f"_regular_gpt_wrap: {start-end}")
 
 def _regular_gpt_big(cfg):
     import time
@@ -170,7 +184,8 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
 
 #    print(" -- starting regular --")
     if dist.get_rank() == 0: print("starting regualr", flush=True)
-#    fsdp_regular = run_regular()
+    fsdp_regular = run_regular()
+    # fsdp_model = run_regular()
     dist.barrier()
     torch.cuda.synchronize()
     # return
@@ -213,6 +228,7 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
     print(f"Rank {dist.get_rank()} time: {k}", flush=True)
     if dist.get_rank() == 0:
         print("Initialized both FSDP models")
+    return
     # for m1, m2 in zip(fsdp_model.modules(), fsdp_regular.modules()):
     #     p1 = list(m1.parameters())
     #     p2 = list(m2.parameters())
@@ -225,12 +241,20 @@ def run_test_with_deferred(deferred_lambda, regular_lambda):
     # run deferred fwd + backward
     # torch.randint(0, args.vocab_size, (args.batch_size, args.block_size), device="cuda:0")
     inputs = torch.randint(0, _VOCAB_SIZE, (1, _BLOCK_SIZE), device=torch.cuda.current_device())
+    fsdp_model = fsdp_model.half()
+#    inputs = inputs.half()
+    start = time.time()
+    dist.barrier()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
     out = fsdp_model(inputs).sum()
     out.backward()
 #    sync_all_device()
     dist.barrier()
     torch.cuda.synchronize()
-    print("Fwd + backward ran")
+    end = time.time()
+    runtime = end - start
+    print(f"Fwd + backward ran in {runtime}")
     return
     # print("ran fwd + backward")
 
@@ -269,9 +293,11 @@ def worker(rank):
     gpt_config = GPT13BConfig
     gpt_config = GPTSmallConfig
     gpt_config = GPTXXXLConfig
+    gpt_config = GPT13BConfig
 #    gpt_config = GPT175BConfig
 #    d = partial(_deferred_gpt, cfg=gpt_config)
-    r = partial(_regular_gpt_big, cfg=gpt_config)
+    # r = partial(_regular_gpt_big, cfg=gpt_config)
+    r = partial(_regular_gpt_wrap, cfg=gpt_config)
     d = partial(_deferred_gpt, cfg=gpt_config)
 #    r = partial(_regular_gpt_big, cfg=gpt_config)
     run_test_with_deferred(d, r)

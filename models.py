@@ -253,8 +253,8 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd, device=device, dtype=dtype)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False, device=device, dtype=dtype)
-        if torch.distributed.get_rank() == 0:
-            logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
+        # if torch.distributed.get_rank() == 0:
+        #     print("number of parameters: %e", sum(p.numel() for p in self.parameters()), flush=True)
 
     def forward(self, idx):
         x = self.emb_stem(idx)
@@ -370,8 +370,8 @@ class ShardedGPT(nn.Module):
             self.ln_f = wrap(nn.LayerNorm(config.n_embd, device=device, dtype=dtype))
             self.head = wrap(nn.Linear(config.n_embd, config.vocab_size, bias=False, device=device, dtype=dtype))
 
-            if rank == 0:
-                print("number of parameters:", sum(p.numel() for p in self.parameters()))
+            if torch.distributed.get_rank() == 0:
+                print("rv number of parameters:", sum(p.numel() for p in self.parameters()), flush=True)
         else:
             print("fariscale fsdp for shardedGPT")
             wrapper = partial(module_wrapper, fsdp=True, activation=activation)
