@@ -74,10 +74,11 @@ def _regular_gpt_wrap(cfg):
     pg = dist.new_group(backend="nccl", timeout=timedelta(seconds=75))
     start = time.time()
     with enable_wrap(wrapper_cls=FSDP, process_group=pg):
-        return wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
+        wrapped= wrap(ShardedGPT(config=ct, device=torch.cuda.current_device()))
     torch.cuda.synchronize()
     end = time.time()
-    if dist.get_rank() == 0: print(f"_regular_gpt_wrap: {start-end}")
+    if dist.get_rank() == 0: print(f" _regular_gpt_wrap: {end-start}", flush=True)
+    return wrapped
 
 def _regular_gpt_big(cfg):
     import time
