@@ -11,7 +11,10 @@ echo "node name "$SLURMD_NODENAME
 echo "rank? "$SLURM_PROCID
 export RANK=$SLURM_PROCID
 export WORLD_SIZE=$SLURM_NTASKS
-#export NCCL_SOCKET_IFNAME=eth0
+export NCCL_DEBUG=info
+export NCCL_IB_DISABLE=1
+export NCCL_SHM_DISABLE=1
+#export NCCL_SOCKET_IFNAME=
 #torchrun --nnodes=2 --nproc_per_node=8 --rdzv_id=100 --rdzv_endpoint=
 python -u meta_test.py
 #########python -u trainer.py --mode=fsdp --model=GPT13B --dtype="fp16" --vocab_size=50000 --block_size=2048 --batch_size=8 --activation="checkpoint" --cpu-offload=True --prefetch="noop" --version="pytorch"
