@@ -278,26 +278,12 @@ def worker(rank):
         f"init for local rank {rank} global {global_rank} ws={global_ws},{addr} {port}, {ifname}",
         flush=True
     )
-    dist.init_process_group("nccl", rank=rank, world_size=global_ws)
+    backend = "nccl"
+    dist.init_process_group(backend, rank=rank, world_size=global_ws)
     print(f"DOne init for local {rank}, global {global_rank}", flush=True)
     dist.barrier()
     # return
-#    d = _deferred_lambda
-#    r = _regular_lambda
-
-    #gpt_config= GPTXXXLConfig
-    #gpt_config = GPTXXXLConfig
-#    gpt_config = GPTLargeConfig
-    gpt_config = GPT13BConfig
-    gpt_config=GPTSmallConfig
-    gpt_config = GPTXXXLConfig
-    gpt_config = GPT13BConfig
     gpt_config = GPTSmallConfig
-    gpt_config = GPTXXXLConfig
-    gpt_config = GPT13BConfig
-#    gpt_config = GPT175BConfig
-#    d = partial(_deferred_gpt, cfg=gpt_config)
-    # r = partial(_regular_gpt_big, cfg=gpt_config)
     r = partial(_regular_gpt_wrap, cfg=gpt_config)
     d = partial(_deferred_gpt, cfg=gpt_config)
 #    r = partial(_regular_gpt_big, cfg=gpt_config)
@@ -311,6 +297,7 @@ def main():
 
 if __name__ == "__main__":
     # os.environ["WORLD_SIZE"] = "2"
+    os.environ["NCCL_SOCKET_IFNAME"]="ens5"
     print("script invoked")
     # exit(0)
     mp.spawn(worker, nprocs=8, args=())

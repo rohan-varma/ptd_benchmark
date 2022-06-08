@@ -14,6 +14,13 @@ export WORLD_SIZE=$SLURM_NTASKS
 export NCCL_DEBUG=info
 export NCCL_IB_DISABLE=1
 export NCCL_SHM_DISABLE=1
+
+if [[ $RANK -eq 0 ]]
+then
+#    export NCCL_SOCKET_IFNAME="veth69b725e"
+    echo "hi"
+fi
+
 #export NCCL_SOCKET_IFNAME=
 #torchrun --nnodes=2 --nproc_per_node=8 --rdzv_id=100 --rdzv_endpoint=
 python -u meta_test.py
