@@ -1,0 +1,58 @@
+nohup: ignoring input
+Using PT checkpoint_wrapper
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 2 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 4 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 7 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 1 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 3 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 0 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 5 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+/fsx/users/rvarm1/rvarm1/repos/pytorch/torch/distributed/fsdp/fully_sharded_data_parallel.py:867: UserWarning: Module is input on CPU, we are moving it to 6 to perform parameter verification, flattening, sharding, and will move it back after.
+  warnings.warn(
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 415.92917346954346, wrapping now --
+Created fsdp model wrapping everything. Took 40.920145750045776
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 416.1351535320282, wrapping now --
+Created fsdp model wrapping everything. Took 42.54168653488159
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 416.4776384830475, wrapping now --
+Created fsdp model wrapping everything. Took 45.29587125778198
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 419.98048996925354, wrapping now --
+Created fsdp model wrapping everything. Took 46.55249881744385
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 419.8346378803253, wrapping now --
+Created fsdp model wrapping everything. Took 48.11350202560425
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 421.0099802017212, wrapping now --
+Created fsdp model wrapping everything. Took 47.80501842498779
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 428.7226686477661, wrapping now --
+Created fsdp model wrapping everything. Took 40.92817735671997
+Using PT checkpoint_wrapper
+ -- starting regular --
+number of parameters: 6469853184
+ -- created plain model in 445.70059418678284, wrapping now --
+Created fsdp model wrapping everything. Took 28.93995237350464

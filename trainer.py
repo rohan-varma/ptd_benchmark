@@ -32,8 +32,10 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.distributed.pipeline.sync import Pipe
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
-from torch.distributed._fsdp.wrap import enable_wrap, wrap
-from torch.distributed._fsdp import FullyShardedDataParallel as FSDP, CPUOffload
+from torch.distributed.fsdp.wrap import enable_wrap, wrap
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, CPUOffload
+from torch.distributed.fsdp.fully_sharded_data_parallel import BackwardPrefetch
+#from fairscale.nn.data_parallel import FullyShardedDataParallel as fairscale_fsdp
 
 @dataclass
 class TrainConfig:
@@ -145,6 +147,42 @@ def parse_args():
         help="enable cpu offload params for FSDP"
     )
 
+    parser.add_argument(
+        "--prefetch",
+        type=str,
+        default="noop",
+        help=(
+            "toggles the modes among "
+            "noop: no prefetching in the backward "
+            "prehook: prefetching in the backward pre hook"
+            "posthook: prefetching in the backward post hook"
+        )
+    )
+
+    parser.add_argument(
+        "--version",
+        type=str,
+        default="pytorch",
+        help=(
+            "toggles the modes among "
+            "pytorch: train with pytorch fsdp"
+            "fairscale: train with fairscale fsdp"
+        )
+    )
+
+    parser.add_argument(
+        "--use_meta",
+        type=bool,
+        default=False,
+        help="meta module"
+    )
+    parser.add_argument(
+        "--init_only",
+        type=bool,
+        default=False,
+        help="return just after initializng"
+    )
+
     return parser.parse_args()
 
 
@@ -212,17 +250,35 @@ def build_fsdp_model(args):
 
     cpu_offload_config = None
     if args.cpu_offload:
-        if rank == 0: 
+        if rank == 0:
             print("Enabling cpu offloading")
         cpu_offload_config = CPUOffload(offload_params=True)
 
+    backward_prefetch = None
+    if args.prefetch == "prehook":
+        backward_prefetch = BackwardPrefetch_.BACKWARD_PRE
+    elif args.prefetch == "posthook":
+        backward_prefetch = BackwardPrefetch_.BACKWARD_POST
+
     if args.model.startswith("GPT"):
         # still needs to call to(device) because GPT buffer is still on CPU
-        with enable_wrap(wrapper_cls=FSDP, cpu_offload=cpu_offload_config):
-            if args.cpu_offload:
-                return wrap(ShardedGPT(get_gpt_config(args), device=device, dtype=args.dtype, activation=args.activation))
-            else:
-                return wrap(ShardedGPT(get_gpt_config(args), device=device, dtype=args.dtype, activation=args.activation)).to(device)
+        if args.version == "pytorch":
+            # Try meta
+            if args.use_meta:
+                pass
+            with enable_wrap(wrapper_cls=FSDP, cpu_offload=cpu_offload_config, backward_prefetch=backward_prefetch):
+                if args.cpu_offload:
+                    return wrap(ShardedGPT(get_gpt_config(args), device=device, dtype=args.dtype, activation=args.activation))
+                else:
+                    return wrap(ShardedGPT(get_gpt_config(args), device=device, dtype=args.dtype, activation=args.activation)).to(device)
+        elif args.version == "fairscale":
+            print("using fairscale fsdp")
+            with enable_wrap(wrapper_cls=fairscale_fsdp, move_params_to_cpu=args.cpu_offload, compute_dtype=torch.float16):
+                if args.cpu_offload:
+                    return wrap(ShardedGPT(get_gpt_config(args), device=device, dtype=args.dtype, activation=args.activation, version=args.version, cpu_offload=True).cpu())
+                else:
+                    return wrap(ShardedGPT(get_gpt_config(args), device=device, dtype=args.dtype, activation=args.activation, version=args.version)).to(device)
+
     elif args.model.startswith("ResNet"):
         # TODO
         raise ValueError("ResNet Model Not Implemented")
@@ -298,7 +354,10 @@ def train(args):
         print(f"Building model time: {init_start_event.elapsed_time(init_end_event) / 1000}sec")
         print(f"{model}")
 
+
     print_memory_summary("After model init", "cuda:0")
+    if args.init_only:
+        return
 
     # build dummy inputs
     if "GPT" in args.model:
@@ -343,7 +402,7 @@ def train(args):
         on_trace_ready=my_tensorboard_trace_handler(f"tb/{now.strftime('%Y_%m_%d_%H_%M_%S')}", rank, use_gzip=True)
     ) if args.profile else contextlib.nullcontext() as prof:
         for i in range(n_iters):
-            before_forward_event.record()           
+            before_forward_event.record()
             out = model(inputs)
             after_forward_event.record()
             loss = out.sum() if isinstance(out, torch.Tensor) else out.local_value().sum()
@@ -354,7 +413,8 @@ def train(args):
             gc.collect()
             opt.step()
             after_step_event.record()
-            opt.zero_grad()
+            for param in model.parameters():
+                param.grad = None
             after_zero_grad_event.record()
             torch.cuda.synchronize()
             fwd_list = []
@@ -435,6 +495,7 @@ def setup(args):
     if rank == 0:
         print(f"parsed args {args}")
         print(f"World size is {world_size}")
+        print(f"PyTorch version {torch.__version__}")
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     if args.mode == "pdp":
         # use fake RPC gang for local pipeline

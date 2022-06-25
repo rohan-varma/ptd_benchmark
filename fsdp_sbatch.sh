@@ -6,9 +6,11 @@
 
 #SBATCH --partition=train
 
-#SBATCH --nodes=32
+#SBATCH --nodes=1
 
-#SBATCH --cpus-per-gpu=12
+#SBATCH --ntasks-per-node=8
+
+#SBATCH --cpus-per-task=12
 
 #SBATCH --gpus-per-node=8
 
@@ -17,4 +19,3 @@
 #SBATCH --time=24:00:00
 
 srun --label fsdp.sh
-
